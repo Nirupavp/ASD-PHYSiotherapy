@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MotionIQ — AI Exercise Tracker</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ── NAV ── -->
+  <nav class="navbar">
+    <div class="nav-brand">
+      <span class="brand-icon">⬡</span>
+      <span class="brand-text">Motion<strong>IQ</strong></span>
+    </div>
+    <div class="nav-links">
+      <button class="nav-btn active" data-view="home">Library</button>
+      <button class="nav-btn" data-view="admin">Admin</button>
+      <button class="nav-btn" data-view="reports">Reports</button>
+    </div>
+    <div class="nav-role">
+      <span id="role-badge" class="role-badge user">USER</span>
+    </div>
+  </nav>
+
+  <!-- ── HOME / LIBRARY VIEW ── -->
+  <section id="view-home" class="view active">
+    <div class="hero-strip">
+      <h1>Your Exercise Library</h1>
+      <p>Select an exercise, follow the guide, and let AI count your perfect reps.</p>
+    </div>
+    <div id="exercise-grid" class="exercise-grid"></div>
+  </section>
+
+  <!-- ── ADMIN VIEW ── -->
+  <section id="view-admin" class="view">
+    <div class="hero-strip">
+      <h1>Admin Panel</h1>
+      <p>Upload demonstration videos. The system will auto-capture ROM &amp; BAI from the reference pose.</p>
+    </div>
+
+
+    <div class="admin-layout">
+      <!-- Upload Form -->
+      <div class="admin-card">
+        <h2>Add New Exercise</h2>
+        <div class="form-group">
+          <label>Exercise Name</label>
+          <input type="text" id="ex-name" placeholder="e.g. Squat, Bicep Curl…" />
+        </div>
+        <div class="form-group">
+          <label>Category</label>
+          <select id="ex-category">
+            <option>Strength</option>
+            <option>Flexibility</option>
+            <option>Cardio</option>
+            <option>Rehabilitation</option>
+            <option>Balance</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Primary Joints Tracked</label>
+          <div class="checkbox-grid" id="joint-checkboxes">
+            <label><input type="checkbox" value="knee" /> Knee</label>
+            <label><input type="checkbox" value="hip" /> Hip</label>
+            <label><input type="checkbox" value="shoulder" /> Shoulder</label>
+            <label><input type="checkbox" value="elbow" /> Elbow</label>
+            <label><input type="checkbox" value="ankle" /> Ankle</label>
+            <label><input type="checkbox" value="wrist" /> Wrist</label>
+            <label><input type="checkbox" value="spine" /> Spine</label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Reference Yoga Pose Image</label>
+          <input type="file" id="yoga-pose-upload" accept="image/*" />
+          <canvas id="yoga-pose-canvas" width="320" height="240" style="margin-top:10px;border-radius:8px;display:none;"></canvas>
+          <div id="yoga-pose-feedback" class="feedback"></div>
+        </div>
+        <div class="form-group">
+          <label>Hold Timer (seconds)</label>
+          <input type="number" id="yoga-timer-input" value="30" min="5" max="300" />
+        </div>
+        <div class="form-group">
+          <label>Repeat Holds</label>
+          <input type="number" id="yoga-repeat-input" value="1" min="1" max="10" />
+        </div>
+        <div class="form-group">
+          <label>Demo Video (mp4 / webm)</label>
+          <div class="file-drop" id="file-drop">
+            <span>Drop video here or <u>browse</u></span>
+            <input type="file" id="video-upload" accept="video/*" />
+          </div>
+          <video id="admin-video-preview" controls style="display:none;width:100%;margin-top:10px;border-radius:8px;"></video>
+        </div>
+
+        <div id="rom-capture-panel" style="display:none;">
+          <h3>Reference ROM &amp; BAI Capture</h3>
+          <p class="hint">Seek to the <strong>top/standing</strong> position → Capture Top. Then seek to <strong>peak effort</strong> → Capture Bottom.</p>
+          <canvas id="admin-canvas" width="480" height="320"></canvas>
+          <div class="capture-stats" id="capture-stats"></div>
+          <div class="form-row">
+            <button class="btn-secondary" id="btn-capture-frame">📸 Capture Top</button>
+            <button class="btn-secondary" id="btn-capture-bottom">📸 Capture Bottom</button>
+          </div>
+          <div id="rom-display" class="rom-display"></div>
+        </div>
+
+        <div class="form-group">
+          <label>Rep Count Direction</label>
+          <select id="ex-rep-direction">
+            <option value="flex-extend">Flexion → Extension (squat, curl…)</option>
+            <option value="extend-flex">Extension → Flexion (push-up…)</option>
+            <option value="abduct">Abduction cycle (lateral raise…)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>ROM Tolerance (degrees ±)</label>
+          <input type="number" id="rom-tolerance" value="15" min="5" max="45" />
+        </div>
+
+        <button class="btn-primary" id="btn-save-exercise">Save Exercise to Library</button>
+        <div id="save-feedback" class="feedback"></div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:20px;">
+        <!-- Library management -->
+        <div class="admin-card">
+          <h2>Manage Library <span id="ex-count" class="badge">0</span></h2>
+          <div id="admin-exercise-list" class="admin-ex-list"></div>
+        </div>
+
+        <!-- ── CHILD PROFILE SETTINGS ── -->
+        <div class="admin-card child-profile-card">
+          <h2>🧒 Child Profile</h2>
+          <p class="hint" style="margin-bottom:16px;">These settings are loaded automatically when Child Mode is active.</p>
+          <div class="form-group">
+            <label>Child's Name (used in greetings)</label>
+            <input type="text" id="child-name" placeholder="e.g. Alex" />
+          </div>
+          <div class="form-group">
+            <label>Default Rep Goal per Session</label>
+            <input type="number" id="child-rep-goal" value="10" min="1" max="50" />
+          </div>
+          <div class="form-group">
+            <label>ROM Tolerance Override (degrees ±)</label>
+            <input type="number" id="child-rom-tolerance" value="25" min="10" max="60" />
+            <p class="hint" style="margin-top:4px;">Higher = more forgiving. Set to the child's current ability level.</p>
+          </div>
+          <div class="form-group">
+            <label>Audio Cues</label>
+            <select id="child-audio-pref">
+              <option value="voice">Voice count ("One!", "Two!"…)</option>
+              <option value="cheer">Cheer on good rep</option>
+              <option value="none">None (silent)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Show Social Story Before Session</label>
+            <select id="child-social-story">
+              <option value="1">Yes — show the step-by-step guide every time</option>
+              <option value="0">No — skip straight to exercise</option>
+            </select>
+          </div>
+          <button class="btn-primary" id="btn-save-child-profile">Save Child Profile</button>
+          <div id="child-profile-feedback" class="feedback"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── EXERCISE SESSION VIEW ── -->
+  <section id="view-session" class="view">
+
+    <div class="session-header">
+      <button class="btn-back" id="btn-back">← Back</button>
+      <div class="session-title-block">
+        <h2 id="session-exercise-name">Exercise</h2>
+        <span id="session-category-badge" class="cat-badge">Strength</span>
+      </div>
+      <div class="session-stats">
+        <div class="stat-box" data-child>
+          <span class="stat-val" id="stat-reps">0</span>
+          <span class="stat-lbl">REPS</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-val" id="stat-sets">0</span>
+          <span class="stat-lbl">SETS</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-val" id="stat-accuracy">–</span>
+          <span class="stat-lbl">ACCURACY</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── ACCESSIBILITY TOOLBAR ── -->
+    <div class="a11y-toolbar">
+      <label title="Removes all flashing and rapid animations — for sensory-sensitive users">
+        <input type="checkbox" id="toggle-calm"> 🧘 Calm Mode
+      </label>
+      <span class="a11y-sep"></span>
+      <label title="Simplified view: big rep counter, stars, picture cues. Hides technical data.">
+        <input type="checkbox" id="toggle-child"> 👦 Child Mode
+      </label>
+      <span class="a11y-sep"></span>
+      <label title="Spoken encouragement and rep counting">
+        <input type="checkbox" id="toggle-audio"> 🔊 Voice Cues
+      </label>
+      <div class="rep-goal-wrap">
+        <label for="rep-goal-input" style="color:var(--muted);">🎯 Goal:</label>
+        <input type="number" id="rep-goal-input" value="10" min="1" max="50" />
+      </div>
+    </div>
+
+    <!-- ── SOCIAL STORY PANEL ── -->
+    <!--
+      Shown before session starts when Child Mode + Social Story is enabled.
+      A simple visual walkthrough so the child knows exactly what will happen.
+    -->
+    <div id="social-story-panel" class="social-story-panel" style="display:none;">
+      <h2 class="story-title" id="story-greeting">Let's Exercise!</h2>
+      <div class="story-steps">
+        <div class="story-step">
+          <div class="story-icon">📷</div>
+          <div class="story-text">The camera<br>will see you</div>
+        </div>
+        <div class="story-arrow">→</div>
+        <div class="story-step">
+          <div class="story-icon">🦴</div>
+          <div class="story-text">A skeleton<br>will appear</div>
+        </div>
+        <div class="story-arrow">→</div>
+        <div class="story-step">
+          <div class="story-icon">🏃</div>
+          <div class="story-text">You do the<br>exercise</div>
+        </div>
+        <div class="story-arrow">→</div>
+        <div class="story-step">
+          <div class="story-icon">⭐</div>
+          <div class="story-text">You earn<br>a star!</div>
+        </div>
+      </div>
+      <button class="btn-primary story-ok-btn" id="btn-story-ok">I'm Ready! 👍</button>
+    </div>
+
+    <div class="session-body">
+
+      <!-- LEFT: Webcam + overlay canvas -->
+      <div class="cam-container">
+        <video id="user-video" autoplay muted playsinline></video>
+        <canvas id="pose-canvas"></canvas>
+
+        <!-- Goal progress bar at top edge of cam -->
+        <div class="rep-goal-bar-wrap">
+          <div class="rep-goal-bar-fill" id="rep-goal-bar" style="width:0%"></div>
+        </div>
+
+        <!-- Earned stars (top-left corner) -->
+        <div class="star-container" id="star-container"></div>
+
+        <!-- Phase pill -->
+        <div class="phase-pill" id="phase-pill">LOADING POSE…</div>
+
+        <!-- Yoga hold timer -->
+        <div id="yoga-timer-wrap" class="yoga-timer-wrap" style="display:none;">
+          <svg width="120" height="120" viewBox="0 0 120 120">
+            <circle cx="60" cy="60" r="52" fill="none" stroke="#1e293b" stroke-width="10"/>
+            <circle id="yoga-timer-ring" cx="60" cy="60" r="52" fill="none"
+              stroke="#22c55e" stroke-width="10"
+              stroke-dasharray="327" stroke-dashoffset="0"
+              stroke-linecap="round"
+              transform="rotate(-90 60 60)"/>
+          </svg>
+          <div id="yoga-timer-number" class="yoga-timer-number">30</div>
+          <div id="yoga-timer-label" class="yoga-timer-label">Hold</div>
+          <div id="yoga-repeat-label" class="yoga-repeat-label">Hold 1/1</div>
+        </div>
+
+        <div id="yoga-match-wrap" class="yoga-match-wrap" style="display:none;">
+          <div class="yoga-match-title">Pose Match</div>
+          <div id="yoga-match-percent" class="yoga-match-percent">100%</div>
+          <div id="yoga-match-details" class="yoga-match-details">Good alignment</div>
+        </div>
+
+        <!--
+          FEEDBACK OVERLAY
+          Standard mode: amber border + short text (not red/flashing)
+          Child mode:    amber border + large pictogram emoji + max 4-word text
+        -->
+        <div class="feedback-overlay" id="feedback-overlay" style="display:none;">
+          <div class="feedback-icon" id="feedback-icon">💛</div>
+          <div class="feedback-text" id="feedback-text"></div>
+          <div class="feedback-picture" id="feedback-picture"></div>
+        </div>
+
+        <!-- Good-rep flash (soft green glow) -->
+        <div class="rep-flash" id="rep-flash"></div>
+
+        <!-- 3-2-1 Countdown before session starts -->
+        <div class="countdown-overlay" id="countdown-overlay" style="display:none;">
+          <div class="countdown-number" id="countdown-number">3</div>
+          <div class="countdown-label" id="countdown-label">Get ready!</div>
+        </div>
+
+        <!-- Goal-reached congratulations -->
+        <div class="congrats-banner" id="congrats-banner" style="display:none;">
+          <div class="congrats-emoji">🎉</div>
+          <div class="congrats-text" id="congrats-text">Amazing!</div>
+          <div class="congrats-sub" id="congrats-sub">You did all your reps!</div>
+        </div>
+      </div>
+
+      <!-- RIGHT: Info panel -->
+      <div class="info-panel">
+
+        <!-- Reference video — visible in both modes -->
+        <div class="info-block child-visible">
+          <h3>Reference</h3>
+          <video id="reference-video" loop muted autoplay playsinline class="ref-video"></video>
+        </div>
+
+        <!-- ROM gauges — hidden in child mode -->
+        <div class="info-block" id="block-rom">
+          <h3>Live Joint Angles</h3>
+          <div id="rom-gauges" class="rom-gauges"></div>
+        </div>
+
+        <!-- BAI — hidden in child mode -->
+        <div class="info-block" id="block-bai">
+          <h3>Body Alignment (BAI)</h3>
+          <div class="bai-bar-wrap">
+            <div class="bai-bar" id="bai-bar"></div>
+          </div>
+          <div class="bai-label" id="bai-label">–</div>
+        </div>
+
+        <!-- Form tips — simplified text in child mode -->
+        <div class="info-block child-visible" id="block-tips">
+          <h3>Form Feedback</h3>
+          <ul class="form-tips" id="form-tips"></ul>
+        </div>
+
+        <!-- Controls -->
+        <div class="session-controls">
+          <button class="btn-primary" id="btn-start-session">Start Session</button>
+          <button class="btn-secondary" id="btn-reset-session">Reset</button>
+          <button class="btn-secondary" id="btn-set-done" style="display:none;">Set Done (+1)</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── REPORTS VIEW ── -->
+  <section id="view-reports" class="view">
+    <div class="hero-strip">
+      <h1>Deviation Reports</h1>
+      <p>Select a user to view their yoga hold session history.</p>
+    </div>
+    <div style="max-width:700px;margin:0 auto;padding:20px;">
+      <div class="form-group">
+        <label>Select User</label>
+        <select id="report-user-select">
+          <option value="">— choose a user —</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Select Exercise</label>
+        <select id="report-exercise-select" disabled>
+          <option value="">— choose an exercise —</option>
+        </select>
+      </div>
+      <div id="report-output"></div>
+      <div id="report-charts"></div>
+    </div>
+  </section>
+
+</div><!-- #app -->
+
+<script src="exercises.js"></script>
+<script src="pose-engine.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
