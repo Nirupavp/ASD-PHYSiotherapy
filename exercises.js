@@ -309,24 +309,21 @@ registerExercise({
   computeBAI: PoseUtils.symmetryBAI,
 });
 
-/* ═══════════════════════════════════════════════════════════
- *  Load persisted (admin-uploaded) exercises from localStorage
- * ═══════════════════════════════════════════════════════════ */
-(function loadPersisted() {
+/* Restore executable callbacks after an exercise definition arrives from the API. */
+window.hydrateExercise = function hydrateExercise(cfg) {
   try {
-    const saved = JSON.parse(localStorage.getItem('motioniq_exercises') || '[]');
-    saved.forEach(cfg => {
-      try {
-        if (typeof cfg.repStateMachine === 'string')
-          cfg.repStateMachine = new Function('phase','angles','config', cfg.repStateMachine);
-        if (typeof cfg.validateForm === 'string')
-          cfg.validateForm = new Function('angles','landmarks','config', cfg.validateForm);
-        if (typeof cfg.computeAngles === 'string')
-          cfg.computeAngles = new Function('lm', cfg.computeAngles);
-        cfg.computeBAI  = PoseUtils.symmetryBAI;
-        cfg.validateRep = (d) => ({ ok: true, errors: [] });
-        ExerciseRegistry.push(cfg);
-      } catch(e) { console.warn('Failed to restore exercise:', cfg.name, e); }
-    });
-  } catch(e) { console.warn('localStorage read error:', e); }
-})();
+    const exercise = { ...cfg };
+    if (typeof exercise.repStateMachine === 'string')
+      exercise.repStateMachine = new Function('phase', 'angles', 'config', exercise.repStateMachine);
+    if (typeof exercise.validateForm === 'string')
+      exercise.validateForm = new Function('angles', 'landmarks', 'config', exercise.validateForm);
+    if (typeof exercise.computeAngles === 'string')
+      exercise.computeAngles = new Function('lm', exercise.computeAngles);
+    exercise.computeBAI = PoseUtils.symmetryBAI;
+    exercise.validateRep = (downAngles, upAngles, config) => ({ ok: true, errors: [] });
+    return exercise;
+  } catch (error) {
+    console.warn('Failed to restore exercise:', cfg.name, error);
+    return null;
+  }
+};
