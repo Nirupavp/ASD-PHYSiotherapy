@@ -23,13 +23,32 @@ const $ = (id) => document.getElementById(id);
 const navBtns = document.querySelectorAll('.nav-btn');
 
 /* ─────────────────── CHILD PROFILE (persisted) ─────────────────── */
-let childProfile = JSON.parse(localStorage.getItem('motioniq_child_profile') || JSON.stringify({
+const DEFAULT_CHILD_PROFILE = {
   name: '',
   repGoal: 10,
   romTolerance: 25,
   audioPref: 'voice',
   socialStory: '1',
-}));
+};
+let childProfile = { ...DEFAULT_CHILD_PROFILE };
+let yogaConfig = null;
+let yogaSessions = [];
+let exerciseSessions = [];
+
+const Api = {
+  async request(path, options = {}) {
+    const response = await fetch(`/api${path}`, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    });
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Unable to save data.');
+    return response.status === 204 ? null : response.json();
+  },
+  get: path => Api.request(path),
+  put: (path, body) => Api.request(path, { method: 'PUT', body: JSON.stringify(body) }),
+  post: (path, body) => Api.request(path, { method: 'POST', body: JSON.stringify(body) }),
+  delete: path => Api.request(path, { method: 'DELETE' }),
+};
 
 function loadChildProfileUI() {
   $('child-name').value           = childProfile.name        || '';
@@ -39,7 +58,7 @@ function loadChildProfileUI() {
   $('child-social-story').value   = childProfile.socialStory || '1';
 }
 
-$('btn-save-child-profile').addEventListener('click', () => {
+$('btn-save-child-profile').addEventListener('click', async () => {
   childProfile = {
     name:         $('child-name').value.trim(),
     repGoal:      parseInt($('child-rep-goal').value)      || 10,
@@ -47,8 +66,12 @@ $('btn-save-child-profile').addEventListener('click', () => {
     audioPref:    $('child-audio-pref').value,
     socialStory:  $('child-social-story').value,
   };
-  localStorage.setItem('motioniq_child_profile', JSON.stringify(childProfile));
-  $('child-profile-feedback').textContent = '✓ Child profile saved!';
+  try {
+    childProfile = await Api.put('/child-profile', childProfile);
+    $('child-profile-feedback').textContent = '✓ Child profile saved!';
+  } catch (error) {
+    $('child-profile-feedback').textContent = `⚠ ${error.message}`;
+  }
   setTimeout(() => { $('child-profile-feedback').textContent = ''; }, 2500);
 });
 
@@ -302,27 +325,14 @@ function generateValidateRepBody(config) {
   `;
 }
 
-function persistAndRegister(config) {
-  const live = { ...config };
-  live.repStateMachine = new Function('phase','angles','config', config.repStateMachine);
-  live.validateForm    = new Function('angles','landmarks','config', config.validateForm);
-  live.computeAngles   = new Function('lm', config.computeAngles);
-  live.computeBAI      = PoseUtils.symmetryBAI;
-  
-  // Generate validateRep based on captured ROM and rep direction
-  const validateRepBody = generateValidateRepBody(config);
-  live.validateRep = new Function('downAngles', 'upAngles', 'config', validateRepBody);
-  
-  ExerciseRegistry.push(live);
-
-  const persisted = JSON.parse(localStorage.getItem('motioniq_exercises') || '[]');
-  persisted.push(config);
+async function persistAndRegister(config) {
   try {
-    localStorage.setItem('motioniq_exercises', JSON.stringify(persisted));
-  } catch (e) {
-    config.videoDataUrl = null;
-    persisted[persisted.length-1] = config;
-    try { localStorage.setItem('motioniq_exercises', JSON.stringify(persisted)); } catch(_) {}
+    const saved = await Api.post('/exercises', config);
+    const savedLive = window.hydrateExercise(saved);
+    if (savedLive) ExerciseRegistry.push(savedLive);
+  } catch (error) {
+    $('save-feedback').textContent = `⚠ ${error.message}`;
+    return;
   }
 
   $('save-feedback').textContent = `✓ "${config.name}" added to the library!`;
@@ -356,14 +366,12 @@ function renderAdminList() {
   ).join('') || '<p style="color:var(--muted);font-size:.85rem;">No exercises yet.</p>';
 
   list.querySelectorAll('.btn-delete').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       const idx = parseInt(btn.dataset.idx);
       const ex  = ExerciseRegistry[idx];
+      try { await Api.delete(`/exercises/${encodeURIComponent(ex.id)}`); }
+      catch (error) { window.alert(error.message); return; }
       ExerciseRegistry.splice(idx, 1);
-      const persisted = JSON.parse(localStorage.getItem('motioniq_exercises')||'[]');
-      const pi = persisted.findIndex(p => p.id === ex.id);
-      if (pi >= 0) persisted.splice(pi, 1);
-      localStorage.setItem('motioniq_exercises', JSON.stringify(persisted));
       renderAdminList();
       renderLibrary();
     });
@@ -908,17 +916,13 @@ $('btn-back').addEventListener('click', () => {
 /* ─────────────────── YOGA POSE FEATURE ─────────────────── */
 
 // ── Storage helpers ──
-function getYogaConfig()   { return JSON.parse(localStorage.getItem('yoga_config')  || 'null'); }
-function getYogaUsers()    { return JSON.parse(localStorage.getItem('yoga_users')   || '[]'); }
-function getYogaSessions() { return JSON.parse(localStorage.getItem('yoga_sessions')|| '[]'); }
-function getExerciseSessions() { return JSON.parse(localStorage.getItem('exercise_sessions')|| '[]'); }
+function getYogaConfig()   { return yogaConfig; }
+function getYogaUsers()    { return [...new Set(yogaSessions.map(session => session.userName))]; }
+function getYogaSessions() { return yogaSessions; }
+function getExerciseSessions() { return exerciseSessions; }
 
-function saveYogaSessions(sessions) {
-  localStorage.setItem('yoga_sessions', JSON.stringify(sessions));
-}
-function saveExerciseSessions(sessions) {
-  localStorage.setItem('exercise_sessions', JSON.stringify(sessions));
-}
+function saveYogaSessions(sessions) { yogaSessions = sessions; }
+function saveExerciseSessions(sessions) { exerciseSessions = sessions; }
 
 // ── Admin: upload reference pose image ──
 if ($('yoga-pose-upload')) $('yoga-pose-upload').addEventListener('change', async function () {
@@ -949,7 +953,7 @@ if ($('yoga-pose-upload')) $('yoga-pose-upload').addEventListener('change', asyn
       timerSeconds: timerSecs,
       repeatCount,
     };
-    localStorage.setItem('yoga_config', JSON.stringify(config));
+    yogaConfig = await Api.put('/yoga-config', config);
     $('yoga-pose-feedback').textContent = `✓ Pose saved! Timer: ${timerSecs}s × ${repeatCount}`;
   };
   img.src = URL.createObjectURL(file);
@@ -960,14 +964,16 @@ if ($('yoga-timer-input')) $('yoga-timer-input').addEventListener('change', () =
   const cfg = getYogaConfig();
   if (!cfg) return;
   cfg.timerSeconds = parseInt($('yoga-timer-input').value) || 30;
-  localStorage.setItem('yoga_config', JSON.stringify(cfg));
+  yogaConfig = cfg;
+  Api.put('/yoga-config', cfg).catch(error => console.warn('Unable to save yoga timer:', error));
 });
 
 if ($('yoga-repeat-input')) $('yoga-repeat-input').addEventListener('change', () => {
   const cfg = getYogaConfig();
   if (!cfg) return;
   cfg.repeatCount = parseInt($('yoga-repeat-input').value) || 1;
-  localStorage.setItem('yoga_config', JSON.stringify(cfg));
+  yogaConfig = cfg;
+  Api.put('/yoga-config', cfg).catch(error => console.warn('Unable to save yoga repeat:', error));
 });
 
 // ── Angle utility (same formula as PoseUtils) ──
@@ -1284,9 +1290,8 @@ function renderExerciseReport(user, exerciseId) {
 }
 
 function saveExerciseSession(data) {
-  const sessions = getExerciseSessions();
-  sessions.push(data);
-  saveExerciseSessions(sessions);
+  exerciseSessions.push(data);
+  Api.post('/exercise-sessions', data).catch(error => console.warn('Unable to save exercise session:', error));
 }
 
 // ── Patch btn-back to also stop yoga timer & save incomplete session ──
@@ -1305,8 +1310,7 @@ $('btn-back').addEventListener('click', () => {
 // ── Save session to localStorage ──
 function saveYogaSession(completedSeconds, totalSeconds, repeatCount = 1) {
   const userName = childProfile.name || 'Unknown';
-  const sessions = getYogaSessions();
-  sessions.push({
+  const session = {
     id:               Date.now(),
     userName,
     date:             new Date().toISOString(),
@@ -1315,8 +1319,9 @@ function saveYogaSession(completedSeconds, totalSeconds, repeatCount = 1) {
     repeatCount,
     completionPct:    Math.round((completedSeconds / totalSeconds) * 100),
     deviations:       _yogaDeviationLog,
-  });
-  saveYogaSessions(sessions);
+  };
+  yogaSessions.push(session);
+  Api.post('/yoga-sessions', session).catch(error => console.warn('Unable to save yoga session:', error));
   _yogaDeviationLog = [];
 }
 
@@ -1468,8 +1473,28 @@ function generateFakeExerciseData() {
 }
 
 /* ─────────────────── INIT ─────────────────── */
-generateFakeExerciseData();
-loadChildProfileUI();
-renderLibrary();
-renderAdminList();
-showView('home');
+async function initialiseApplication() {
+  try {
+    const [savedExercises, savedProfile, savedYogaConfig, savedYogaSessions, savedExerciseSessions] = await Promise.all([
+      Api.get('/exercises'),
+      Api.get('/child-profile'),
+      Api.get('/yoga-config'),
+      Api.get('/yoga-sessions'),
+      Api.get('/exercise-sessions'),
+    ]);
+    savedExercises.map(window.hydrateExercise).filter(Boolean).forEach(exercise => ExerciseRegistry.push(exercise));
+    childProfile = { ...DEFAULT_CHILD_PROFILE, ...(savedProfile || {}) };
+    yogaConfig = savedYogaConfig;
+    yogaSessions = Array.isArray(savedYogaSessions) ? savedYogaSessions : [];
+    exerciseSessions = Array.isArray(savedExerciseSessions) ? savedExerciseSessions : [];
+  } catch (error) {
+    console.warn('MotionIQ API is unavailable:', error);
+    $('exercise-grid').innerHTML = '<div class="empty-state"><div class="empty-icon">⚠</div><p>Unable to connect to the MotionIQ server. Start it with <code>npm start</code>.</p></div>';
+  }
+  loadChildProfileUI();
+  renderLibrary();
+  renderAdminList();
+  showView('home');
+}
+
+initialiseApplication();

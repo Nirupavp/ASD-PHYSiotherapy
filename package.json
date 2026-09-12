@@ -1,0 +1,11 @@
+{
+  "name": "motioniq",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MotionIQ exercise tracker with a persistent backend API",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --check server.js && node --check app.js && node --check exercises.js"
+  },
+  "engines": { "node": ">=18" }
+}
